@@ -28,8 +28,6 @@ namespace Server
                 .Select(s => s[Random.Next(s.Length)]).ToArray());
         }
     }
-
-    
     
     public static class SocketListener
     {
