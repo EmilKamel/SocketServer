@@ -7,97 +7,101 @@ using System.Threading;
 
 namespace Server
 {
-    public class RemoteHostState
+    public class ClientState
     {
-        private static readonly Random Random = new Random();
-        public string RandomRemoteHostStateName;
-        public Socket WorkSocket;
+        public readonly string RemoteClientHostName;
+        public Socket RemoteClientHandlerSocket;
         public const int BufferSize = 1024;
         public readonly byte[] Buffer = new byte[BufferSize];
-        public readonly StringBuilder ReceivedDataString = new StringBuilder();
+        public readonly StringBuilder ReceivedMessageBuilder = new StringBuilder();
 
-        public RemoteHostState()
+        public ClientState()
         {
-            RandomRemoteHostStateName = RandomString(8);
+            RemoteClientHostName = RandomString(8);
         }
 
         private static string RandomString(int length)
         {
+            var random = new Random();
             const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
             return new string(Enumerable.Repeat(chars, length)
-                .Select(s => s[Random.Next(s.Length)]).ToArray());
+            .Select(s => s[random.Next(s.Length)]).ToArray());
         }
     }
     
-    public static class SocketListener
+    public static class Server
     {
         private static readonly ManualResetEvent ResetEvent = new ManualResetEvent(false);
 
         private static void StartListening()
         {
-            IPHostEntry ipHostInfo = Dns.GetHostEntry(Dns.GetHostName());
-            IPAddress ipAddress = ipHostInfo.AddressList[0];
-            IPEndPoint localEndPoint = new IPEndPoint(ipAddress, 11000);
+            var hostName = Dns.GetHostEntry(Dns.GetHostName());
+            var ipAddress = hostName.AddressList[0];
+            var ipAddressAndPort = new IPEndPoint(ipAddress, 11000);
 
-            Socket listener = new Socket(ipAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            var serverSocket = new Socket(ipAddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
 
             try
             {
-                listener.Bind(localEndPoint);
-                listener.Listen(100);
+                serverSocket.Bind(ipAddressAndPort);
+                serverSocket.Listen(100);
 
                 while (true)
                 {
                     ResetEvent.Reset();
-                    Console.WriteLine("Waiting for a connection...");
-                    listener.BeginAccept(AcceptCallback, listener);
+                    serverSocket.BeginAccept(AcceptCallback, serverSocket);
+                    Console.WriteLine("Awaiting client connection \n");
                     
                     ResetEvent.WaitOne();
                 }
             }
-            catch (Exception e)
+            catch (Exception exception)
             {
-                Console.WriteLine(e.ToString());
+                Console.WriteLine(exception.ToString());
             }
-
-            Console.WriteLine("\nPress ENTER to continue...");
-            Console.Read();
         }
 
-        private static void AcceptCallback(IAsyncResult ar)
+        private static void AcceptCallback(IAsyncResult asyncResult)
         {
             ResetEvent.Set();
             
-            Socket listener = (Socket) ar.AsyncState;
-            Socket remoteHostHandler = listener.EndAccept(ar);
+            var serverSocket = (Socket) asyncResult.AsyncState;
+            var clientHandlerSocket = serverSocket.EndAccept(asyncResult);
             
-            RemoteHostState remoteHostState = new RemoteHostState {WorkSocket = remoteHostHandler};
-            remoteHostHandler.BeginReceive(remoteHostState.Buffer, 0, RemoteHostState.BufferSize, 0, ReadCallback, remoteHostState);
+            var clientState = new ClientState {RemoteClientHandlerSocket = clientHandlerSocket};
+            clientHandlerSocket.BeginReceive(clientState.Buffer, 0, ClientState.BufferSize, 0, ReadCallback, clientState);
         }
 
-        private static void ReadCallback(IAsyncResult ar)
+        private static void ReadCallback(IAsyncResult asyncResult)
         {
-            RemoteHostState remoteHostState = (RemoteHostState) ar.AsyncState;
-
-            int bytesRead = remoteHostState.WorkSocket.EndReceive(ar);
-
-            if (bytesRead > 0)
+            try
             {
-                remoteHostState.ReceivedDataString.Append(Encoding.ASCII.GetString(remoteHostState.Buffer, 0, bytesRead));
+                var clientState = (ClientState) asyncResult.AsyncState;
 
-                var message = remoteHostState.ReceivedDataString.ToString();
-                remoteHostState.ReceivedDataString.Clear();
-                
-                Console.WriteLine($"T: {Thread.CurrentThread.ManagedThreadId} S: {remoteHostState.RandomRemoteHostStateName} Client Message : {message}");
-                
-                if (message.IndexOf("<ROGER>", StringComparison.Ordinal) > -1)
+                var clientMessageBytes = clientState.RemoteClientHandlerSocket.EndReceive(asyncResult);
+
+                if (clientMessageBytes <= 0) return;
+
+                clientState.ReceivedMessageBuilder.Append(Encoding.ASCII.GetString(clientState.Buffer, 0, clientMessageBytes));
+                var receivedClientMessage = clientState.ReceivedMessageBuilder.ToString();
+                clientState.ReceivedMessageBuilder.Clear();
+
+                var formattedClientMessage = $"T: {Thread.CurrentThread.ManagedThreadId} S: {clientState.RemoteClientHostName} Client Message: {receivedClientMessage}";
+                Console.WriteLine(formattedClientMessage);
+
+                if (receivedClientMessage.IndexOf("<ROGER>", StringComparison.Ordinal) > -1)
                 {
-                    Console.WriteLine($"Read {message.Length} bytes from socket. \n Data : {message}");
+                    clientState.RemoteClientHandlerSocket.Shutdown(SocketShutdown.Both);
+                    clientState.RemoteClientHandlerSocket.Close();
                 }
                 else
                 {
-                    remoteHostState.WorkSocket.BeginReceive(remoteHostState.Buffer, 0, RemoteHostState.BufferSize, 0, ReadCallback, remoteHostState);
+                    clientState.RemoteClientHandlerSocket.BeginReceive(clientState.Buffer, 0, ClientState.BufferSize, 0, ReadCallback, clientState);
                 }
+            }
+            catch (Exception)
+            {
+                // ignored - Continue if client closes unexpectedly.
             }
         }
 
