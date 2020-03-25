@@ -88,10 +88,14 @@ namespace Server
 
                 var formattedClientMessage = $"T: {Thread.CurrentThread.ManagedThreadId} S: {clientState.RemoteClientHostName} Client Message: {receivedClientMessage}";
                 Console.WriteLine(formattedClientMessage);
-                
+
+                clientState.RemoteClientHandlerSocket.BeginReceive(clientState.Buffer, 0, ClientState.BufferSize, 0,
+                    ReadCallback, clientState);
+
             }
-            catch (Exception)
+            catch (Exception e)
             {
+                Console.WriteLine(e.ToString());
                 // ignored - Continue if client closes unexpectedly.
             }
         }
